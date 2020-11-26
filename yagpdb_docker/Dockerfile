@@ -11,7 +11,7 @@ FROM alpine:latest
 
 WORKDIR /app
 VOLUME /app/soundboard \
-  /app/cert
+	/app/cert
 EXPOSE 80 443
 
 # We need the X.509 certificates for client TLS to work.
@@ -36,4 +36,5 @@ COPY --from=builder /appbuild/yagpdb/cmd/yagpdb .
 ENV extra_flags ""
 
 # `exec` allows us to receive shutdown signals.
-CMD exec /app/yagpdb -all -pa $extra_flags
+# CMD exec /app/yagpdb -all -pa $extra_flags
+CMD exec /app/yagpdb -bot $extra_flags
