@@ -17,6 +17,9 @@ EXPOSE 80 443
 # We need the X.509 certificates for client TLS to work.
 RUN apk --no-cache add ca-certificates
 
+# Add tzdata for time#LoadLocation
+RUN apk add --no-cache tzdata
+
 # Add ffmpeg for soundboard support
 RUN apk --no-cache add ffmpeg
 
