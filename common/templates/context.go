@@ -13,7 +13,7 @@ import (
 
 	"emperror.dev/errors"
 	"github.com/jonas747/discordgo"
-	"github.com/jonas747/dstate"
+	"github.com/jonas747/dstate/v2"
 	"github.com/jonas747/template"
 	"github.com/jonas747/yagpdb/bot"
 	"github.com/jonas747/yagpdb/common"
@@ -288,10 +288,10 @@ func (c *Context) executeParsed() (string, error) {
 	var buf bytes.Buffer
 	w := LimitWriter(&buf, 25000)
 
-	started := time.Now()
+	// started := time.Now()
 	err := parsed.Execute(w, c.Data)
 
-	dur := time.Since(started)
+	// dur := time.Since(started)
 	if c.FixedOutput != "" {
 		return c.FixedOutput, nil
 	}
@@ -302,7 +302,7 @@ func (c *Context) executeParsed() (string, error) {
 			err = errors.New("response grew too big (>25k)")
 		}
 
-		return result, errors.WithMessage(err, "Failed executing template (dur = "+dur.String()+")")
+		return result, errors.WithMessage(err, "Failed executing template")
 	}
 
 	return result, nil
