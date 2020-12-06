@@ -1292,7 +1292,6 @@ func (c *Context) tmplTryCall(name string, args ...reflect.Value) ([]interface{}
 		return nil, errors.New("can't call tryCall function using tryCall")
 	}
 
-	// no built in function returns an error, so no need to look up those.
 	fun, ok := c.ContextFuncs[name]
 	if !ok {
 		// try looking up the name from StandardFuncMap
