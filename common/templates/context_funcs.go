@@ -20,6 +20,11 @@ import (
 var ErrTooManyCalls = errors.New("Too many calls to this function")
 var ErrTooManyAPICalls = errors.New("Too many potential discord api calls function")
 
+var (
+	errorType        = reflect.TypeOf((*error)(nil)).Elem()
+	reflectValueType = reflect.TypeOf((*reflect.Value)(nil)).Elem()
+)
+
 func (c *Context) tmplSendDM(s ...interface{}) string {
 	if len(s) < 1 || c.IncreaseCheckCallCounter("send_dm", 1) || c.MS == nil {
 		return ""
@@ -1218,4 +1223,162 @@ func (c *Context) tmplEditNickname(Nickname string) (string, error) {
 	}
 
 	return "", nil
+}
+
+// tryCall attempts to call a function by its name, returning a slice of the return value and error.
+// Modified version of https://github.com/golang/go/blob/3b2a578166bdedd94110698c971ba8990771eb89/src/text/template/exec.go#L669
+func (c *Context) tmplTryCall(name string, args ...reflect.Value) ([]interface{}, error) {
+	// Probably will lead to oddities I haven't though of, and no real reason to call tryCall using tryCall
+	if name == "tryCall" {
+		return nil, errors.New("can't call \"tryCall\" function using tryCall")
+	}
+
+	fun, ok := c.ContextFuncs[name]
+	if !ok {
+		// try looking up the name from StandardFuncMap
+		fun, ok = StandardFuncMap[name]
+		if !ok {
+			return nil, fmt.Errorf("function %q not found", name)
+		}
+	}
+
+	funVal := reflect.ValueOf(fun)
+	typ := funVal.Type()
+
+	numIn := len(args)
+	numFixed := len(args)
+	if typ.IsVariadic() {
+		numFixed = typ.NumIn() - 1 // last arg is the variadic one.
+		if numIn < numFixed {
+			return nil, fmt.Errorf("wrong number of args for %s: want at least %d got %d", name, typ.NumIn()-1, len(args))
+		}
+	} else if numIn != typ.NumIn() {
+		return nil, fmt.Errorf("wrong number of args for %s: want %d got %d", name, typ.NumIn(), numIn)
+	}
+
+	if !goodFunc(typ) {
+		return nil, fmt.Errorf("can't call function %q with %d results", name, typ.NumOut())
+	}
+
+	argv := make([]reflect.Value, numIn)
+	i := 0
+	// Validate fixed args.
+	for ; i < numFixed && i < len(args); i++ {
+		val, err := validateType(args[i], typ.In(i))
+		if err != nil {
+			return nil, err
+		}
+		argv[i] = val
+	}
+	// Now the ... args.
+	if typ.IsVariadic() {
+		argType := typ.In(typ.NumIn() - 1).Elem() // Argument is a slice.
+		for ; i < len(args); i++ {
+			val, err := validateType(args[i], argType)
+			if err != nil {
+				return nil, err
+			}
+			argv[i] = val
+		}
+	}
+
+	v, err := safeCall(funVal, argv)
+	if err != nil {
+		return []interface{}{nil, err}, nil
+	}
+
+	if v.Type() == reflectValueType {
+		v = v.Interface().(reflect.Value)
+	}
+
+	return []interface{}{v, nil}, nil
+}
+
+// safeCall runs fun.Call(args), and returns the resulting value and error, if
+// any. If the call panics, the panic value is returned as an error.
+// Taken from https://github.com/golang/go/blob/3b2a578166bdedd94110698c971ba8990771eb89/src/text/template/funcs.go#L355
+func safeCall(fun reflect.Value, args []reflect.Value) (val reflect.Value, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(error); ok {
+				err = e
+			} else {
+				err = fmt.Errorf("%v", r)
+			}
+		}
+	}()
+	ret := fun.Call(args)
+	if len(ret) == 2 && !ret[1].IsNil() {
+		return ret[0], ret[1].Interface().(error)
+	}
+	return ret[0], nil
+}
+
+// goodFunc reports whether the function or method has the right result signature.
+// Taken from https://github.com/golang/go/blob/3b2a578166bdedd94110698c971ba8990771eb89/src/text/template/funcs.go#L110
+func goodFunc(typ reflect.Type) bool {
+	// We allow functions with 1 result or 2 results where the second is an error.
+	switch {
+	case typ.NumOut() == 1:
+		return true
+	case typ.NumOut() == 2 && typ.Out(1) == errorType:
+		return true
+	}
+	return false
+}
+
+// canBeNil reports whether an untyped nil can be assigned to the type. See reflect.Zero.
+// Taken from https://github.com/golang/go/blob/3b2a578166bdedd94110698c971ba8990771eb89/src/text/template/exec.go#L735
+func canBeNil(typ reflect.Type) bool {
+	switch typ.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return true
+	case reflect.Struct:
+		return typ == reflectValueType
+	}
+	return false
+}
+
+// validateType guarantees that the value is valid and assignable to the type.
+// Taken from https://github.com/golang/go/blob/3b2a578166bdedd94110698c971ba8990771eb89/src/text/template/exec.go#L746
+func validateType(value reflect.Value, typ reflect.Type) (reflect.Value, error) {
+	if !value.IsValid() {
+		if typ == nil {
+			// An untyped nil interface{}. Accept as a proper nil value.
+			return reflect.ValueOf(nil), nil
+		}
+		if canBeNil(typ) {
+			// Like above, but use the zero value of the non-nil type.
+			return reflect.Zero(typ), nil
+		}
+		return reflect.Value{}, fmt.Errorf("invalid value; expected %s", typ)
+	}
+	if typ == reflectValueType && value.Type() != typ {
+		return reflect.ValueOf(value), nil
+	}
+	if typ != nil && !value.Type().AssignableTo(typ) {
+		if value.Kind() == reflect.Interface && !value.IsNil() {
+			value = value.Elem()
+			if value.Type().AssignableTo(typ) {
+				return value, nil
+			}
+			// fallthrough
+		}
+		// Does one dereference or indirection work? We could do more, as we
+		// do with method receivers, but that gets messy and method receivers
+		// are much more constrained, so it makes more sense there than here.
+		// Besides, one is almost always all you need.
+		switch {
+		case value.Kind() == reflect.Ptr && value.Type().Elem().AssignableTo(typ):
+			value = value.Elem()
+			if !value.IsValid() {
+				return reflect.Value{}, fmt.Errorf("dereference of nil pointer of type %s", typ)
+			}
+		case reflect.PtrTo(value.Type()).AssignableTo(typ) && value.CanAddr():
+			value = value.Addr()
+		default:
+			return reflect.Value{}, fmt.Errorf("wrong type for value; expected %s; got %s", typ, value.Type())
+		}
+	}
+	return value, nil
 }
