@@ -3,6 +3,7 @@ module github.com/jonas747/yagpdb
 go 1.13
 
 require (
+	cloud.google.com/go v0.46.3 // indirect
 	emperror.dev/errors v0.4.3
 	github.com/AYLIEN/aylien_textapi_go v0.6.0
 	github.com/AlekSi/pointer v1.1.0 // indirect
@@ -12,25 +13,24 @@ require (
 	github.com/StackExchange/wmi v0.0.0-20190523213315-cbe66965904d // indirect
 	github.com/alfredxing/calc v0.0.0-20180827002445-77daf576f976
 	github.com/bwmarrin/snowflake v0.3.0
-	github.com/certifi/gocertifi v0.0.0-20190905060710-a5e0173ced67 // indirect
 	github.com/denisenkom/go-mssqldb v0.0.0-20200206145737-bbfc9a55622e // indirect
 	github.com/dghubble/oauth1 v0.6.0
 	github.com/didip/tollbooth v4.0.2+incompatible
 	github.com/dpatrie/urbandictionary v0.0.0-20151214192647-3b38cbf4cb81
 	github.com/ericlagergren/decimal v0.0.0-20190729173012-f05d33913e5a // indirect
-	github.com/evalphobia/logrus_sentry v0.8.2
 	github.com/fatih/structs v1.1.0
-	github.com/getsentry/raven-go v0.2.0 // indirect
 	github.com/getsentry/sentry-go v0.7.0
 	github.com/go-ole/go-ole v1.2.4 // indirect
 	github.com/go-sql-driver/mysql v1.5.0 // indirect
 	github.com/golang/protobuf v1.3.4 // indirect
 	github.com/google/safebrowsing v0.0.0-20190624211811-bbf0d20d26b3
 	github.com/gorilla/schema v1.1.0
+	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/hashicorp/golang-lru v0.5.4 // indirect
 	github.com/jarcoal/httpmock v1.0.4 // indirect
 	github.com/jinzhu/gorm v1.9.10
 	github.com/jmoiron/sqlx v1.2.0
+	github.com/jo3-l/template v1.3.0
 	github.com/jonas747/cardsagainstdiscord v1.1.1-0.20200617121715-2c969a853358
 	github.com/jonas747/dca v0.0.0-20190317094138-10e959e9d3e8
 	github.com/jonas747/dcmd v1.2.4
@@ -43,7 +43,6 @@ require (
 	github.com/jonas747/go-twitter v0.0.0-20200706234916-1d17060b92bc
 	github.com/jonas747/jdshardmanager v1.0.1
 	github.com/jonas747/ogg v0.0.0-20161220051205-b4f6f4cf3757 // indirect
-	github.com/jonas747/template v1.1.2
 	github.com/jonas747/when v0.0.3-0.20201118193825-7feeddcd993f
 	github.com/justinian/dice v0.0.0-20170728002755-6a18b51d929c // indirect
 	github.com/karlseguin/ccache v2.0.3+incompatible
@@ -63,8 +62,6 @@ require (
 	github.com/shurcooL/github_flavored_markdown v0.0.0-20181002035957-2122de532470
 	github.com/sirupsen/logrus v1.4.2
 	github.com/spf13/cast v1.3.1 // indirect
-	github.com/spf13/cobra v1.1.1 // indirect
-	github.com/spf13/viper v1.7.1 // indirect
 	github.com/tidwall/btree v0.0.0-20170113224114-9876f1454cf0 // indirect
 	github.com/tidwall/buntdb v1.1.0
 	github.com/tidwall/gjson v1.3.2 // indirect
@@ -84,6 +81,8 @@ require (
 	golang.org/x/time v0.0.0-20190308202827-9d24e82272b4
 	google.golang.org/api v0.13.0
 	google.golang.org/appengine v1.6.5 // indirect
+	google.golang.org/genproto v0.0.0-20191108220845-16a3f7862a1a // indirect
 	gopkg.in/karlseguin/expect.v1 v1.0.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
+	gopkg.in/yaml.v2 v2.2.8 // indirect
 )

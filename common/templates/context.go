@@ -12,9 +12,9 @@ import (
 	"unicode/utf8"
 
 	"emperror.dev/errors"
+	"github.com/jo3-l/template"
 	"github.com/jonas747/discordgo"
 	"github.com/jonas747/dstate/v2"
-	"github.com/jonas747/template"
 	"github.com/jonas747/yagpdb/bot"
 	"github.com/jonas747/yagpdb/common"
 	"github.com/jonas747/yagpdb/common/scheduledevents2"
