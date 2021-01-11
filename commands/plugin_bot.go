@@ -16,8 +16,6 @@ import (
 	"github.com/jonas747/yagpdb/bot"
 	"github.com/jonas747/yagpdb/bot/eventsystem"
 	"github.com/jonas747/yagpdb/common"
-	"github.com/jonas747/yagpdb/common/featureflags"
-	"github.com/mediocregopher/radix/v3"
 )
 
 var (
@@ -361,29 +359,5 @@ var cmdPrefix = &YAGCommand{
 		}
 
 		return fmt.Sprintf("Prefix of `%d`: `%s`", targetGuildID, prefix), nil
-	},
-}
-
-var cmdSetPrefix = &YAGCommand{
-	Name:        "SetPrefix",
-	Description: "Sets command prefix of the current server",
-	CmdCategory: CategoryTool,
-	Arguments: []*dcmd.ArgDef{
-		&dcmd.ArgDef{Name: "Prefix", Type: dcmd.String},
-	},
-	RequireDiscordPerms: []int64{discordgo.PermissionManageServer},
-	RunFunc: func(data *dcmd.Data) (interface{}, error) {
-		prefix := data.Args[0].Str()
-		if len(prefix) < 1 || len(prefix) > 100 {
-			return "Prefix cannot be smaller than 1 or larger than 100 characters", nil
-		}
-
-		err := common.RedisPool.Do(radix.Cmd(nil, "SET", "command_prefix:"+discordgo.StrID(data.GS.ID), prefix))
-		if err != nil {
-			return "Failed updating prefix", nil
-		}
-
-		featureflags.MarkGuildDirty(data.GS.ID)
-		return "Successfully updated prefix", nil
 	},
 }

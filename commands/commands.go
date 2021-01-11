@@ -80,7 +80,6 @@ func InitCommands() {
 	CommandSystem.Root.AddMidlewares(YAGCommandMiddleware)
 	CommandSystem.Root.AddCommand(cmdHelp, cmdHelp.GetTrigger())
 	CommandSystem.Root.AddCommand(cmdPrefix, cmdPrefix.GetTrigger())
-	CommandSystem.Root.AddCommand(cmdSetPrefix, cmdSetPrefix.GetTrigger())
 
 	for _, v := range common.Plugins {
 		if adder, ok := v.(CommandProvider); ok {
