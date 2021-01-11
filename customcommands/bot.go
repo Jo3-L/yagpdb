@@ -2,7 +2,6 @@ package customcommands
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"math/rand"
 	"regexp"
@@ -26,7 +25,6 @@ import (
 	"github.com/jonas747/yagpdb/bot/eventsystem"
 	"github.com/jonas747/yagpdb/commands"
 	"github.com/jonas747/yagpdb/common"
-	"github.com/jonas747/yagpdb/common/featureflags"
 	"github.com/jonas747/yagpdb/common/keylock"
 	"github.com/jonas747/yagpdb/common/multiratelimit"
 	"github.com/jonas747/yagpdb/common/pubsub"
@@ -37,7 +35,6 @@ import (
 	"github.com/jonas747/yagpdb/stdcommands/util"
 	"github.com/sirupsen/logrus"
 	"github.com/vmihailenco/msgpack"
-	"github.com/volatiletech/sqlboiler/boil"
 	"github.com/volatiletech/sqlboiler/queries/qm"
 )
 
@@ -60,7 +57,7 @@ var _ bot.BotInitHandler = (*Plugin)(nil)
 var _ commands.CommandProvider = (*Plugin)(nil)
 
 func (p *Plugin) AddCommands() {
-	commands.AddRootCommands(p, cmdListCommands, cmdFixCommands, cmdUpsertCommand, cmdDeleteCommand)
+	commands.AddRootCommands(p, cmdListCommands)
 }
 
 func (p *Plugin) BotInit() {
@@ -90,121 +87,6 @@ type DelayedRunCCData struct {
 	Member  *dstate.MemberState
 
 	UserKey interface{} `json:"user_key"`
-}
-
-var cmdUpsertCommand = &commands.YAGCommand{
-	CmdCategory:  commands.CategoryTool,
-	Name:         "UpsertCustomCommand",
-	Aliases:      []string{"UpsertCC"},
-	Description:  "Creates or updates a new custom command with Command type and given trigger",
-	RequiredArgs: 2,
-	Arguments: []*dcmd.ArgDef{
-		&dcmd.ArgDef{Name: "Trigger", Type: dcmd.String},
-		&dcmd.ArgDef{Name: "Response", Type: dcmd.String},
-	},
-	RequireDiscordPerms: []int64{discordgo.PermissionManageServer},
-	RunFunc: func(data *dcmd.Data) (interface{}, error) {
-		trigger := data.Args[0].Str()
-		response := data.Args[1].Str()
-
-		_, err := templates.NewContext(nil, nil, nil).Parse(response)
-		if err != nil {
-			return fmt.Sprintf("Syntax error:\n```%s```", err), nil
-		}
-
-		existingCmd, err := models.CustomCommands(qm.Where("guild_id = ? AND text_trigger = ?", data.GS.ID, trigger)).OneG(data.Context())
-		if err != nil && err != sql.ErrNoRows {
-			return "Failed querying for existing CC", nil
-		}
-
-		var ccID int64
-		// We're creating a new custom command
-		if existingCmd == nil {
-			count, err := models.CustomCommands(qm.Where("guild_id = ?", data.GS.ID)).CountG(data.Context())
-			if err != nil {
-				return "Failed querying for custom command count", nil
-			}
-
-			maxCmds := MaxCommands
-			if isPremium, err := premium.IsGuildPremium(data.GS.ID); err != nil {
-				return "Failed fetching premium state for this guild", nil
-			} else if isPremium {
-				maxCmds = MaxCommandsPremium
-			}
-
-			// As we're creating a new command, if it's equal, adding 1 will be over the limit
-			if int(count) >= maxCmds {
-				return fmt.Sprintf("Max custom commands (%d) reached for this guild", maxCmds), nil
-			}
-
-			ccID, err = common.GenLocalIncrID(data.GS.ID, "custom_command")
-			if err != nil {
-				return "Failed generating new ID for command", nil
-			}
-		} else {
-			ccID = existingCmd.LocalID
-		}
-
-		cmd := &models.CustomCommand{
-			TriggerType:              int(CommandTriggerCommand),
-			TextTrigger:              trigger,
-			TextTriggerCaseSensitive: false,
-
-			Channels:              []int64{},
-			ChannelsWhitelistMode: false,
-			Roles:                 []int64{},
-			RolesWhitelistMode:    false,
-
-			TimeTriggerInterval:       0,
-			TimeTriggerExcludingDays:  []int64{},
-			TimeTriggerExcludingHours: []int64{},
-			ContextChannel:            0,
-
-			ReactionTriggerMode: int16(0),
-			Responses:           []string{response},
-			ShowErrors:          true,
-
-			GuildID: data.GS.ID,
-			LocalID: ccID,
-		}
-
-		err = cmd.UpsertG(data.Context(), true, []string{"guild_id", "local_id"}, boil.Infer(), boil.Infer())
-		if err != nil {
-			return "Failed upserting custom command", nil
-		}
-
-		if existingCmd == nil {
-			featureflags.MarkGuildDirty(data.GS.ID)
-		}
-
-		common.LogIgnoreError(pubsub.Publish("custom_commands_clear_cache", data.GS.ID, nil), "failed creating pubsub cache eviction", nil)
-		return "Upserted custom command successfully", nil
-	},
-}
-
-var cmdDeleteCommand = &commands.YAGCommand{
-	CmdCategory:  commands.CategoryTool,
-	Name:         "DeleteCustomCommand",
-	Aliases:      []string{"DelCC", "RmCC", "RemoveCC"},
-	Description:  "Deletes a custom command by ID",
-	RequiredArgs: 1,
-	Arguments: []*dcmd.ArgDef{
-		&dcmd.ArgDef{Name: "ID", Type: dcmd.Int},
-	},
-	RequireDiscordPerms: []int64{discordgo.PermissionManageServer},
-	RunFunc: func(data *dcmd.Data) (interface{}, error) {
-		id := data.Args[0].Int()
-
-		affected, err := models.CustomCommands(qm.Where("local_id = ? AND guild_id = ?", id, data.GS.ID)).DeleteAll(data.Context(), common.PQ)
-		if err != nil {
-			return "Failed deleting custom command", nil
-		}
-
-		if affected < 1 {
-			return "Couldn't find that custom command", nil
-		}
-		return "Deleted custom command successfully", nil
-	},
 }
 
 var cmdListCommands = &commands.YAGCommand{
