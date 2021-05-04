@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
+	"reflect"
+	"strings"
 	"time"
 
 	"emperror.dev/errors"
@@ -28,6 +31,7 @@ func init() {
 	templates.RegisterSetupFunc(func(ctx *templates.Context) {
 		ctx.ContextFuncs["parseArgs"] = tmplExpectArgs(ctx)
 		ctx.ContextFuncs["carg"] = tmplCArg
+		ctx.ContextFuncs["cswitch"] = tmplCSwitch
 		ctx.ContextFuncs["execCC"] = tmplRunCC(ctx)
 		ctx.ContextFuncs["scheduleUniqueCC"] = tmplScheduleUniqueCC(ctx)
 		ctx.ContextFuncs["cancelScheduledUniqueCC"] = tmplCancelUniqueCC(ctx)
@@ -48,7 +52,36 @@ func init() {
 }
 
 func tmplCArg(typ string, name string, opts ...interface{}) (*dcmd.ArgDef, error) {
-	def := &dcmd.ArgDef{Name: name}
+	def := dcmd.ArgDef{Name: name}
+	err := addType(&def, typ, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	return &def, nil
+}
+
+func tmplCSwitch(id, displayName string, rest ...interface{}) (*dcmd.ArgDef, error) {
+	if id == "" {
+		return nil, errors.New("id for switch must be at least 1 character long")
+	}
+
+	def := dcmd.ArgDef{Switch: id, Name: displayName}
+	if len(rest) > 0 {
+		typ, ok := rest[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("type for switch arg must be a string; got %T instead", rest[0])
+		}
+		err := addType(&def, typ, rest[1:]...)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &def, nil
+}
+
+func addType(def *dcmd.ArgDef, typ string, opts ...interface{}) error {
 	switch typ {
 	case "int":
 		if len(opts) >= 2 {
@@ -81,21 +114,114 @@ func tmplCArg(typ string, name string, opts ...interface{}) (*dcmd.ArgDef, error
 	case "role":
 		def.Type = &commands.RoleArg{}
 	default:
-		return nil, errors.New("Unknown type")
+		return errors.New("Unknown type")
 	}
 
-	return def, nil
+	return nil
 }
 
+var (
+	argDefPtrType    = reflect.TypeOf((*dcmd.ArgDef)(nil))
+	reflectValueType = reflect.TypeOf((*reflect.Value)(nil)).Elem()
+	boolType         = reflect.TypeOf(true)
+	stringType       = reflect.TypeOf("")
+)
+
+var errExpectArgsInvalidArgs = errors.New("expected one or more argument definitions OR a single options map to be provided")
+
+var formatter = &dcmd.StdHelpFormatter{}
+
 func tmplExpectArgs(ctx *templates.Context) interface{} {
-	return func(numRequired int, failedMessage string, args ...*dcmd.ArgDef) (*ParsedArgs, error) {
+	return func(numRequired int, failedMessage string, rest ...interface{}) (interface{}, error) {
 		result := &ParsedArgs{}
-		if len(args) == 0 || ctx.Msg == nil || ctx.Data["StrippedMsg"] == nil {
+		if len(rest) == 0 || ctx.Msg == nil || ctx.Data["StrippedMsg"] == nil {
 			return result, nil
 		}
 
-		result.defs = args
+		// only set for 'basic' invocations (i.e. not options map)
+		var switches []*dcmd.ArgDef
+		var args []*dcmd.ArgDef
 
+		v1 := reflect.ValueOf(rest[0])
+		if _, ok := validateType(v1, argDefPtrType); ok {
+			for _, arg := range rest {
+				vDef, ok := validateType(reflect.ValueOf(arg), argDefPtrType)
+				if !ok {
+					return nil, errExpectArgsInvalidArgs
+				}
+
+				def := vDef.Interface().(*dcmd.ArgDef)
+				if def.Switch != "" {
+					switches = append(switches, def)
+				} else {
+					args = append(args, def)
+				}
+			}
+		} else if v1.Kind() == reflect.Map {
+			if len(rest) > 1 {
+				// shouldn't be any other arguments passed
+				return nil, errExpectArgsInvalidArgs
+			}
+		} else {
+			return nil, errExpectArgsInvalidArgs
+		}
+
+		// 'basic' invocation without options map
+		if switches != nil || args != nil {
+			msg := ctx.Msg
+			stripped := ctx.Data["StrippedMsg"].(string)
+			split := dcmd.SplitArgs(stripped)
+
+			// create the dcmd data context used in the arg parsing
+			dcmdData, err := commands.CommandSystem.FillData(common.BotSession, msg)
+			if err != nil {
+				return result, errors.WithMessage(err, "tmplExpectArgs")
+			}
+
+			// parse switches first
+			if len(switches) > 0 {
+				split, err = dcmd.ParseSwitches(switches, dcmdData, split)
+			}
+
+			// if no error occurred, parse the positional arguments
+			if err == nil && len(args) > 0 {
+				err = dcmd.ParseArgDefs(args, numRequired, nil, dcmdData, split)
+			}
+
+			if err != nil {
+				if failedMessage != "" {
+					ctx.FixedOutput = err.Error() + "\n" + failedMessage
+				} else {
+					var comboDefs []*dcmd.ArgDef
+					if len(args) == 0 {
+						comboDefs = switches
+					} else if len(switches) == 0 {
+						comboDefs = args
+					} else {
+						// make a slice of arg defs containing both args and switches
+						comboDefs = make([]*dcmd.ArgDef, len(args)+len(switches))
+						copy(comboDefs, args)
+						for i, elem := range switches {
+							comboDefs[i+len(args)] = elem
+						}
+					}
+
+					ctx.FixedOutput = err.Error() + "\nUsage: `" + formatter.ArgDefLine(comboDefs, numRequired) + "`"
+				}
+			}
+
+			result.data = dcmdData
+			return result, err
+		}
+
+		// options map passed, so validate it first
+		vOpts := reflect.ValueOf(rest[0])
+		opts, err := validateExpectArgsOptions(vOpts)
+		if err != nil {
+			return nil, err
+		}
+
+		// create the dcmd data context used in the arg parsing
 		msg := ctx.Msg
 		stripped := ctx.Data["StrippedMsg"].(string)
 		split := dcmd.SplitArgs(stripped)
@@ -106,72 +232,445 @@ func tmplExpectArgs(ctx *templates.Context) interface{} {
 			return result, errors.WithMessage(err, "tmplExpectArgs")
 		}
 
-		// attempt to parse them
-		err = dcmd.ParseArgDefs(args, numRequired, nil, dcmdData, split)
+		// parse switches first
+		if len(opts.Switches) > 0 {
+			split, err = dcmd.ParseSwitches(opts.Switches, dcmdData, split)
+		}
+
+		// if no error occurred, parse the positional arguments
+		if err == nil && len(opts.Args) > 0 {
+			err = dcmd.ParseArgDefs(opts.Args, numRequired, opts.ArgCombos, dcmdData, split)
+		}
+
+		var errMsg strings.Builder
 		if err != nil {
-			if failedMessage != "" {
-				ctx.FixedOutput = err.Error() + "\n" + failedMessage
+			errMsg.WriteString(err.Error())
+			errMsg.WriteByte('\n')
+
+			if len(opts.ArgCombos) > 0 {
+				errMsg.WriteString("Valid uses:\n```")
+				for _, combo := range opts.ArgCombos {
+					comboDefs := make([]*dcmd.ArgDef, len(combo))
+					for i, v := range combo {
+						comboDefs[i] = opts.Args[v]
+					}
+					errMsg.WriteString(formatter.ArgDefLine(comboDefs, len(combo)))
+					errMsg.WriteByte('\n')
+				}
+				errMsg.WriteString("```\nFlags:\n```")
+				for _, def := range opts.Switches {
+					errMsg.WriteString("[-")
+					errMsg.WriteString(def.Switch)
+					errMsg.WriteByte(' ')
+					errMsg.WriteString(formatter.ArgDef(def))
+					errMsg.WriteString("]\n")
+				}
+				errMsg.WriteString("```")
 			} else {
-				ctx.FixedOutput = err.Error() + "\nUsage: `" + (*dcmd.StdHelpFormatter).ArgDefLine(nil, args, numRequired) + "`"
+				errMsg.WriteString("Usage: `")
+				var comboDefs []*dcmd.ArgDef
+				if len(opts.Args) == 0 {
+					comboDefs = opts.Switches
+				} else if len(opts.Switches) == 0 {
+					comboDefs = opts.Switches
+				} else {
+					// make a slice of arg defs containing both args and switches
+					comboDefs = make([]*dcmd.ArgDef, len(opts.Args)+len(opts.Switches))
+					copy(comboDefs, opts.Args)
+					for i, elem := range opts.Switches {
+						comboDefs[i+len(args)] = elem
+					}
+				}
+				errMsg.WriteString(formatter.ArgDefLine(comboDefs, numRequired))
 			}
 		}
 
-		result.parsed = dcmdData.Args
-		return result, err
+		// if wrapping errors is not enabled, stop execution by returning an error (default behavior)
+		if !opts.WrapErrors {
+			if err != nil {
+				ctx.FixedOutput = errMsg.String()
+			}
+
+			result.data = dcmdData
+			return result, err
+		}
+
+		// otherwise, create a wrapper type holding the error and the parsed result
+		result.data = dcmdData
+		wrapper := &expectArgsWrappedResult{Parsed: result}
+		if err != nil {
+			wrapper.Err = err
+			wrapper.ErrMessage = errMsg.String()
+		}
+
+		// return no error; let the user handle it
+		return wrapper, nil
 	}
+}
+
+type expectArgsWrappedResult struct {
+	Err        error
+	ErrMessage string
+	Parsed     *ParsedArgs
+}
+
+type expectArgsOptions struct {
+	Args       []*dcmd.ArgDef
+	Switches   []*dcmd.ArgDef
+	ArgCombos  [][]int
+	WrapErrors bool
+}
+
+var (
+	errArgsOptionWrongType      = errors.New("args option was not a slice/array of arg defs")
+	errSwitchesOptionWrongType  = errors.New("switches option was not a slice/array of switch arg defs")
+	errArgCombosOptionWrongType = errors.New("arg combos option was not a slice/array of argument combinations")
+)
+
+func validateExpectArgsOptions(val reflect.Value) (*expectArgsOptions, error) {
+	opts := &expectArgsOptions{}
+	var seen []string
+	maxArgComboIdx := -1 // max argument index in any arg combo
+
+	iter := val.MapRange()
+	for iter.Next() {
+		if len(seen) == 4 {
+			// all four options are already set, so break early
+			break
+		}
+
+		vKey, ok := validateType(iter.Key(), stringType)
+		if !ok {
+			continue
+		}
+
+		key := vKey.String()
+		if common.ContainsStringSliceFold(seen, key) {
+			// already set this option
+			continue
+		}
+
+		v, isNil := indirect(iter.Value())
+		if isNil {
+			continue
+		}
+
+		switch {
+		case strings.EqualFold(key, "args"):
+			seen = append(seen, key)
+			if !isArrayLike(v) {
+				return nil, errArgsOptionWrongType
+			}
+
+			opts.Args = make([]*dcmd.ArgDef, v.Len())
+			for i := 0; i < v.Len(); i++ {
+				vDef, ok := validateType(v.Index(i), argDefPtrType)
+				if !ok {
+					return nil, errArgsOptionWrongType
+				}
+
+				def := vDef.Interface().(*dcmd.ArgDef)
+				if def.Switch != "" {
+					// arg defs shouldn't contain switch arg defs
+					return nil, errArgsOptionWrongType
+				}
+				opts.Args[i] = def
+			}
+
+		case strings.EqualFold(key, "switches"):
+			seen = append(seen, key)
+			if !isArrayLike(v) {
+				return nil, errSwitchesOptionWrongType
+			}
+
+			opts.Switches = make([]*dcmd.ArgDef, v.Len())
+			for i := 0; i < v.Len(); i++ {
+				vDef, ok := validateType(v.Index(i), argDefPtrType)
+				if !ok {
+					return nil, errSwitchesOptionWrongType
+				}
+
+				def := vDef.Interface().(*dcmd.ArgDef)
+				if def.Switch == "" {
+					// switch defs shouldn't contain any arg defs
+					return nil, errSwitchesOptionWrongType
+				}
+				opts.Switches[i] = def
+			}
+
+		case strings.EqualFold(key, "argcombos"):
+			seen = append(seen, key)
+			if !isArrayLike(v) {
+				return nil, errArgCombosOptionWrongType
+			}
+
+			if v.Len() > 5 {
+				return nil, errors.New("max of 5 arg combos allowed")
+			}
+
+			opts.ArgCombos = make([][]int, v.Len())
+			for i := 0; i < v.Len(); i++ {
+				elem, ok := indirect(v.Index(i))
+				if !ok {
+					return nil, errArgCombosOptionWrongType
+				}
+
+				if !isArrayLike(elem) {
+					return nil, errArgCombosOptionWrongType
+				}
+
+				combo := make([]int, elem.Len())
+				maxIdx := -1
+				for j := 0; j < elem.Len(); j++ {
+					idx := int(templates.ToInt64(elem.Index(j).Interface()))
+					// make sure all arg indices are > 0
+					if idx < 0 {
+						return nil, errors.New("arg combos must consist of non-negative integers")
+					}
+					// make sure there are no duplicate arg indices
+					for z := 0; z < j; z++ {
+						if combo[z] == idx {
+							return nil, errors.New("arg combos must consist of unique integers")
+						}
+					}
+					if idx > maxIdx {
+						maxIdx = idx
+					}
+					combo[j] = idx
+				}
+
+				if maxIdx > maxArgComboIdx {
+					maxArgComboIdx = maxIdx
+				}
+
+				// make sure there are no duplicate arg combos, likely a typo +
+				// saves us additional work when finding the correct arg combo
+				for j := 0; j < i; j++ {
+					knownCombo := opts.ArgCombos[j]
+					if reflect.DeepEqual(knownCombo, combo) {
+						return nil, errors.New("arg combos must be unique")
+					}
+				}
+				opts.ArgCombos[i] = combo
+			}
+
+		case strings.EqualFold(key, "wraperrors"):
+			seen = append(seen, key)
+			vBool, ok := validateType(v, boolType)
+			if !ok {
+				return nil, errors.New("wrap errors option must be a boolean")
+			}
+
+			opts.WrapErrors = vBool.Bool()
+		}
+	}
+
+	// make sure that all arg combo indices aren't out of range
+	// e.g. we only have 1 argument but the user supplies {2} as an argument
+	// combo
+	if maxArgComboIdx >= len(opts.Args) {
+		return nil, errors.New("all argument combo indices should be in range")
+	}
+
+	return opts, nil
+}
+
+func isArrayLike(val reflect.Value) bool {
+	switch val.Kind() {
+	case reflect.Array, reflect.Slice:
+		return true
+	default:
+		return false
+	}
+}
+
+// indirect is taken from text/template/exec.go. It returns the item at the end
+// of indirection, and a bool to indicate if it's nil.
+func indirect(v reflect.Value) (rv reflect.Value, isNil bool) {
+	for ; v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface; v = v.Elem() {
+		if v.IsNil() {
+			return v, true
+		}
+	}
+	return v, false
+}
+
+type kind int
+
+// Taken from text/template/funcs.go
+const (
+	invalidKind kind = iota
+	boolKind
+	complexKind
+	intKind
+	floatKind
+	stringKind
+	uintKind
+)
+
+// basicKindT is taken from text/template/funcs.go with a slight modification to
+// not return an error.
+func basicKindT(k reflect.Kind) kind {
+	switch k {
+	case reflect.Bool:
+		return boolKind
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return intKind
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return uintKind
+	case reflect.Float32, reflect.Float64:
+		return floatKind
+	case reflect.Complex64, reflect.Complex128:
+		return complexKind
+	case reflect.String:
+		return stringKind
+	}
+	return invalidKind
+}
+
+// canBeNil is taken from text/template/exec.go. It reports whether an untyped
+// nil can be assigned to the type. See reflect.Zero.
+func canBeNil(typ reflect.Type) bool {
+	switch typ.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return true
+	case reflect.Struct:
+		return typ == reflectValueType
+	}
+	return false
+}
+
+// validateType is taken from text/template/exec.go. It guarantees that the
+// value is valid and assignable to the type.
+func validateType(value reflect.Value, typ reflect.Type) (reflect.Value, bool) {
+	if !value.IsValid() {
+		if typ == nil {
+			// An untyped nil interface{}. Accept as a proper nil value.
+			return reflect.ValueOf(nil), true
+		}
+		if canBeNil(typ) {
+			// Like above, but use the zero value of the non-nil type.
+			return reflect.Zero(typ), true
+		}
+		return reflect.Value{}, false
+	}
+	if typ == reflectValueType && value.Type() != typ {
+		return reflect.ValueOf(value), true
+	}
+	if typ != nil && !value.Type().AssignableTo(typ) {
+		if value.Kind() == reflect.Interface && !value.IsNil() {
+			value = value.Elem()
+			if value.Type().AssignableTo(typ) {
+				return value, true
+			}
+			// fallthrough
+		}
+		// Does one dereference or indirection work? We could do more, as we do
+		// with method receivers, but that gets messy and method receivers are
+		// much more constrained, so it makes more sense there than here.
+		// Besides, one is almost always all you need.
+		switch {
+		case value.Kind() == reflect.Ptr && value.Type().Elem().AssignableTo(typ):
+			value = value.Elem()
+			if !value.IsValid() {
+				return reflect.Value{}, false
+			}
+		case reflect.PtrTo(value.Type()).AssignableTo(typ) && value.CanAddr():
+			value = value.Addr()
+		default:
+			kind1 := basicKindT(typ.Kind())
+			kind2 := basicKindT(value.Kind())
+
+			if kind1 == intKind && kind2 == intKind {
+				vc := value.Int()
+				switch typ.Kind() {
+				case reflect.Int:
+					return reflect.ValueOf(int(vc)), true
+				case reflect.Int8:
+					return reflect.ValueOf(int8(vc)), true
+				case reflect.Int16:
+					return reflect.ValueOf(int16(vc)), true
+				case reflect.Int32:
+					return reflect.ValueOf(int32(vc)), true
+				case reflect.Int64:
+					return reflect.ValueOf(vc), true
+				}
+			} else if kind1 == uintKind && kind2 == uintKind {
+				vc := value.Uint()
+				switch typ.Kind() {
+				case reflect.Uint:
+					return reflect.ValueOf(uint(vc)), true
+				case reflect.Uint8:
+					return reflect.ValueOf(uint8(vc)), true
+				case reflect.Uint16:
+					return reflect.ValueOf(uint16(vc)), true
+				case reflect.Uint32:
+					return reflect.ValueOf(uint32(vc)), true
+				case reflect.Uint64:
+					return reflect.ValueOf(uint64(vc)), true
+				}
+			} else if kind1 == floatKind && kind2 == floatKind {
+				vc := value.Float()
+				switch typ.Kind() {
+				case reflect.Float64:
+					return reflect.ValueOf(float64(vc)), true
+				case reflect.Float32:
+					return reflect.ValueOf(float32(vc)), true
+				}
+			}
+
+			return reflect.Value{}, false
+		}
+	}
+	return value, true
 }
 
 type ParsedArgs struct {
-	defs   []*dcmd.ArgDef
-	parsed []*dcmd.ParsedArg
+	data *dcmd.Data
+}
+
+func (pa *ParsedArgs) Switch(id string) interface{} {
+	arg := pa.data.Switch(id)
+	return resolveArgValue(arg)
 }
 
 func (pa *ParsedArgs) Get(index int) interface{} {
-	if len(pa.parsed) <= index {
+	if len(pa.data.Args) <= index {
 		return nil
 	}
 
-	switch pa.parsed[index].Def.Type.(type) {
-	case *dcmd.IntArg:
-		i := pa.parsed[index]
-		if i.Value == nil {
-			return nil
-		}
-		return i.Int()
-	case *dcmd.ChannelArg:
-		i := pa.parsed[index].Value
-		if i == nil {
-			return nil
-		}
-
-		c := i.(*dstate.ChannelState)
-		return templates.CtxChannelFromCSLocked(c)
-	case *commands.MemberArg:
-		i := pa.parsed[index].Value
-		if i == nil {
-			return nil
-		}
-
-		m := i.(*dstate.MemberState)
-		return m.DGoCopy()
-	case *commands.RoleArg:
-		i := pa.parsed[index].Value
-		if i == nil {
-			return nil
-		}
-
-		return i.(*discordgo.Role)
-	}
-
-	return pa.parsed[index].Value
+	arg := pa.data.Args[index]
+	return resolveArgValue(arg)
 }
 
 func (pa *ParsedArgs) IsSet(index int) interface{} {
 	return pa.Get(index) != nil
 }
 
-// tmplRunCC either run another custom command immeditely with a max stack depth of 2
-// or schedules a custom command to be run in the future sometime with the provided data placed in .ExecData
+func resolveArgValue(arg *dcmd.ParsedArg) interface{} {
+	if arg == nil || arg.Value == nil {
+		return nil
+	}
+
+	switch arg.Def.Type.(type) {
+	case *dcmd.IntArg:
+		return arg.Int()
+	case *dcmd.ChannelArg:
+		c := arg.Value.(*dstate.ChannelState)
+		return templates.CtxChannelFromCSLocked(c)
+	case *commands.MemberArg:
+		m := arg.Value.(*dstate.MemberState)
+		return m.DGoCopy()
+	case *commands.RoleArg:
+		return arg.Value.(*discordgo.Role)
+	}
+
+	return arg.Value
+}
+
+// tmplRunCC either run another custom command immeditely with a max stack depth
+// of 2 or schedules a custom command to be run in the future sometime with the
+// provided data placed in .ExecData
 func tmplRunCC(ctx *templates.Context) interface{} {
 	return func(ccID int, channel interface{}, delaySeconds interface{}, data interface{}) (string, error) {
 		if ctx.IncreaseCheckCallCounterPremium("runcc", 1, 10) {
@@ -244,11 +743,14 @@ func tmplRunCC(ctx *templates.Context) interface{} {
 	}
 }
 
-// tmplScheduleUniqueCC schedules a custom command to be ran in the future, but you can provide a key where it will overwrite existing
-// scheduled runs with the same cc id and key
+// tmplScheduleUniqueCC schedules a custom command to be ran in the future, but
+// you can provide a key where it will overwrite existing scheduled runs with
+// the same cc id and key
 //
-// for example in a custom mute command you only want 1 scheduled unmute cc per user, to do that you would use the userid as the key
-// then when you use the custom mute command again it will overwrite the mute duration and overwrite the scheduled unmute cc for that user
+// for example in a custom mute command you only want 1 scheduled unmute cc per
+// user, to do that you would use the userid as the key then when you use the
+// custom mute command again it will overwrite the mute duration and overwrite
+// the scheduled unmute cc for that user
 func tmplScheduleUniqueCC(ctx *templates.Context) interface{} {
 	return func(ccID int, channel interface{}, delaySeconds interface{}, key interface{}, data interface{}) (string, error) {
 		if ctx.IncreaseCheckCallCounterPremium("runcc", 1, 10) {
@@ -313,7 +815,8 @@ func tmplScheduleUniqueCC(ctx *templates.Context) interface{} {
 	}
 }
 
-// tmplCancelUniqueCC cancels a scheduled cc execution in the future with the provided cc id and key
+// tmplCancelUniqueCC cancels a scheduled cc execution in the future with the
+// provided cc id and key
 func tmplCancelUniqueCC(ctx *templates.Context) interface{} {
 	return func(ccID int, key interface{}) (string, error) {
 		if ctx.IncreaseCheckCallCounter("cancelcc", 10) {
