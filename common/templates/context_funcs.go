@@ -969,6 +969,14 @@ func (c *Context) tmplDelMessage(channel, msgID interface{}, args ...interface{}
 	return ""
 }
 
+var customEmojiRegexp = regexp.MustCompile(`<a?:([\w~]{2,32}:\d{17,19})>`)
+
+// normalizeEmoji normalizes an emoji to be sent to Discord.
+// In particular, it will change custom emojis inputted directly like <name:id> to simply be name:id.
+func normalizeEmoji(emoji string) string {
+	return customEmojiRegexp.ReplaceAllString(emoji, "$1")
+}
+
 //Deletes reactions from a message either via reaction trigger or argument-set of emojis,
 //needs channelID, messageID, userID, list of emojis - up to twenty
 //can be run once per CC.
@@ -998,7 +1006,7 @@ func (c *Context) tmplDelMessageReaction(values ...reflect.Value) (reflect.Value
 				return reflect.Value{}, ErrTooManyCalls
 			}
 
-			if err := common.BotSession.MessageReactionRemove(cID, mID, reaction.String(), uID); err != nil {
+			if err := common.BotSession.MessageReactionRemove(cID, mID, normalizeEmoji(reaction.String()), uID); err != nil {
 				return reflect.Value{}, err
 			}
 		}
@@ -1033,7 +1041,7 @@ func (c *Context) tmplDelAllMessageReactions(values ...reflect.Value) (reflect.V
 					return reflect.Value{}, ErrTooManyCalls
 				}
 
-				if err := common.BotSession.MessageReactionRemoveEmoji(cID, mID, emoji.String()); err != nil {
+				if err := common.BotSession.MessageReactionRemoveEmoji(cID, mID, normalizeEmoji(emoji.String())); err != nil {
 					return reflect.Value{}, err
 				}
 			}
@@ -1115,7 +1123,7 @@ func (c *Context) tmplAddReactions(values ...reflect.Value) (reflect.Value, erro
 				return reflect.Value{}, ErrTooManyCalls
 			}
 
-			if err := common.BotSession.MessageReactionAdd(c.Msg.ChannelID, c.Msg.ID, reaction.String()); err != nil {
+			if err := common.BotSession.MessageReactionAdd(c.Msg.ChannelID, c.Msg.ID, normalizeEmoji(reaction.String())); err != nil {
 				return reflect.Value{}, err
 			}
 		}
@@ -1132,7 +1140,7 @@ func (c *Context) tmplAddResponseReactions(values ...reflect.Value) (reflect.Val
 				return reflect.Value{}, ErrTooManyCalls
 			}
 
-			c.CurrentFrame.AddResponseReactionNames = append(c.CurrentFrame.AddResponseReactionNames, reaction.String())
+			c.CurrentFrame.AddResponseReactionNames = append(c.CurrentFrame.AddResponseReactionNames, normalizeEmoji(reaction.String()))
 		}
 		return reflect.ValueOf(""), nil
 	}
@@ -1168,7 +1176,7 @@ func (c *Context) tmplAddMessageReactions(values ...reflect.Value) (reflect.Valu
 				return reflect.Value{}, ErrTooManyCalls
 			}
 
-			if err := common.BotSession.MessageReactionAdd(cID, mID, reaction.String()); err != nil {
+			if err := common.BotSession.MessageReactionAdd(cID, mID, normalizeEmoji(reaction.String())); err != nil {
 				return reflect.Value{}, err
 			}
 		}
