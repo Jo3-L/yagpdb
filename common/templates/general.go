@@ -442,12 +442,25 @@ func tmplMult(args ...interface{}) interface{} {
 		return sumF
 	default:
 		sumI := tmplToInt(args[0])
+		isDuration := false
 		for i, v := range args {
+			if !isDuration {
+				switch v.(type) {
+				case time.Duration, *time.Duration:
+					isDuration = true
+				}
+			}
+
 			if i == 0 {
 				continue
 			}
 
 			sumI *= tmplToInt(v)
+		}
+
+		// Convert to time.Duration if one of the arguments was of that type, so users don't have to type-cast operations like mult(5, .TimeMinute).
+		if isDuration {
+			return time.Duration(sumI)
 		}
 		return sumI
 	}
@@ -482,12 +495,35 @@ func tmplDiv(args ...interface{}) interface{} {
 	}
 }
 
-func tmplMod(args ...interface{}) float64 {
+func tmplMod(args ...interface{}) interface{} {
 	if len(args) != 2 {
 		return math.NaN()
 	}
 
+	// Special-case two ints so users do not have to typecast mod(int, int) to an int in templates.
+	if i1, ok := isIntLike(args[0]); ok {
+		if i2, ok := isIntLike(args[1]); ok {
+			return i1 % i2
+		}
+	}
+
 	return math.Mod(ToFloat64(args[0]), ToFloat64(args[1]))
+}
+
+// isIntLike determines whether v is an int type, returning a valid int64 value if so.
+func isIntLike(v interface{}) (int64, bool) {
+	switch vv := v.(type) {
+	case int16:
+		return int64(vv), true
+	case int32:
+		return int64(vv), true
+	case int64:
+		return int64(vv), true
+	case int:
+		return int64(vv), true
+	default:
+		return 0, false
+	}
 }
 
 func tmplFDiv(args ...interface{}) interface{} {
