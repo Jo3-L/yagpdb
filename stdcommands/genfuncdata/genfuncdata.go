@@ -19,6 +19,11 @@ type FuncData struct {
 	Variadic bool   `json:"variadic"`
 }
 
+func newFuncData(f interface{}, name string) *FuncData {
+	typ := reflect.ValueOf(f).Elem().Type()
+	return &FuncData{Name: name, NumIn: typ.NumIn(), Variadic: typ.IsVariadic()}
+}
+
 var Command = &commands.YAGCommand{
 	CmdCategory:          commands.CategoryDebug,
 	HideFromCommandsPage: true,
@@ -29,15 +34,10 @@ var Command = &commands.YAGCommand{
 		ctx := templates.NewContext(data.GuildData.GS, data.GuildData.CS, data.GuildData.MS)
 		funcData := make([]*FuncData, 0, len(templates.StandardFuncMap)+len(ctx.ContextFuncs))
 		for name, fun := range templates.StandardFuncMap {
-			typ := reflect.ValueOf(fun).Type()
-			data := &FuncData{Name: name, NumIn: typ.NumIn(), Variadic: typ.IsVariadic()}
-			funcData = append(funcData, data)
+			funcData = append(funcData, newFuncData(fun, name))
 		}
-
 		for name, fun := range ctx.ContextFuncs {
-			typ := reflect.ValueOf(fun).Type()
-			data := &FuncData{Name: name, NumIn: typ.NumIn(), Variadic: typ.IsVariadic()}
-			funcData = append(funcData, data)
+			funcData = append(funcData, newFuncData(fun, name))
 		}
 
 		res, err := json.Marshal(funcData)
