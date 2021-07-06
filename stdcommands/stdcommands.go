@@ -19,6 +19,7 @@ import (
 	"github.com/jonas747/yagpdb/stdcommands/define"
 	"github.com/jonas747/yagpdb/stdcommands/dogfact"
 	"github.com/jonas747/yagpdb/stdcommands/findserver"
+	"github.com/jonas747/yagpdb/stdcommands/genfuncdata"
 	"github.com/jonas747/yagpdb/stdcommands/globalrl"
 	"github.com/jonas747/yagpdb/stdcommands/guildunavailable"
 	"github.com/jonas747/yagpdb/stdcommands/howlongtobeat"
@@ -118,6 +119,7 @@ func (p *Plugin) AddCommands() {
 		toggledbg.Command,
 		globalrl.Command,
 		listflags.Command,
+		genfuncdata.Command,
 	)
 
 	statedbg.Commands()
