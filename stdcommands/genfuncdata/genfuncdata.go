@@ -32,6 +32,8 @@ var Command = &commands.YAGCommand{
 	HideFromHelp:         true,
 	RunFunc: util.RequireOwner(func(data *dcmd.Data) (interface{}, error) {
 		ctx := templates.NewContext(data.GuildData.GS, data.GuildData.CS, data.GuildData.MS)
+		// ctx.ContextFuncs is lazily loaded, so call Parse() once with a dummy input to make it show up.
+		ctx.Parse("")
 		funcData := make([]*FuncData, 0, len(templates.StandardFuncMap)+len(ctx.ContextFuncs))
 		for name, fun := range templates.StandardFuncMap {
 			funcData = append(funcData, newFuncData(fun, name))
